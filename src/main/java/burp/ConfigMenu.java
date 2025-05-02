@@ -14,9 +14,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 import burp.api.montoya.MontoyaApi;
-import burp.api.montoya.persistence.Preferences;
+import burp.api.montoya.persistence.PersistedObject;
 
 /**
  * Menu to configure the extension options.
@@ -87,7 +89,7 @@ public class ConfigMenu implements Runnable {
     /**
      * Access the persistent preferences from the user settings in Burp.
      */
-    private Preferences preferences;
+    private PersistedObject preferences;
 
     /**
      * Ref on project logger.
@@ -110,7 +112,7 @@ public class ConfigMenu implements Runnable {
         this.api = api;
         this.trace = trace;
         this.activityLogger = activityLogger;
-        this.preferences = this.api.persistence().preferences();
+        this.preferences = this.api.persistence().extensionData();
 
         String value;
         //Load the extension settings
@@ -124,7 +126,6 @@ public class ConfigMenu implements Runnable {
         //Load the save state of the options
         ONLY_INCLUDE_REQUESTS_FROM_SCOPE = Boolean.TRUE.equals(this.preferences.getBoolean(ONLY_INCLUDE_REQUESTS_FROM_SCOPE_CFG_KEY));
         EXCLUDE_IMAGE_RESOURCE_REQUESTS = Boolean.TRUE.equals(this.preferences.getBoolean(EXCLUDE_IMAGE_RESOURCE_REQUESTS_CFG_KEY));
-        IS_LOGGING_PAUSED = Boolean.TRUE.equals(this.preferences.getBoolean(PAUSE_LOGGING_CFG_KEY));
         INCLUDE_HTTP_RESPONSE_CONTENT = Boolean.TRUE.equals(this.preferences.getBoolean(INCLUDE_HTTP_RESPONSE_CONTENT_CFG_KEY));
     }
 
@@ -188,7 +189,7 @@ public class ConfigMenu implements Runnable {
         this.cfgMenu.add(subMenuIncludeHttpResponseContent);
         //Add the menu to pause the logging
         menuText = "Pause the logging";
-        final JCheckBoxMenuItem subMenuPauseTheLogging = new JCheckBoxMenuItem(menuText, IS_LOGGING_PAUSED);
+        JCheckBoxMenuItem subMenuPauseTheLogging = new JCheckBoxMenuItem(menuText, Boolean.TRUE.equals(this.preferences.getBoolean(PAUSE_LOGGING_CFG_KEY)));
         subMenuPauseTheLogging.addActionListener(new AbstractAction(menuText) {
             public void actionPerformed(ActionEvent e) {
                 if (subMenuPauseTheLogging.isSelected()) {
@@ -196,10 +197,45 @@ public class ConfigMenu implements Runnable {
                     ConfigMenu.IS_LOGGING_PAUSED = Boolean.TRUE;
                     ConfigMenu.this.trace.writeLog("From now, logging is paused.");
                 } else {
-                    ConfigMenu.this.preferences.setBoolean(PAUSE_LOGGING_CFG_KEY, Boolean.FALSE);
-                    ConfigMenu.IS_LOGGING_PAUSED = Boolean.FALSE;
+                    String msg = "";
                     String dbPath = ConfigMenu.this.preferences.getString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY);
-                    String msg = "From now, logging is enabled and stored in database file '" + dbPath + "'.";
+                    if (dbPath == null || !Files.exists(Paths.get(dbPath))) {
+                        Object[] options = {"Select DB file", "Pause Logging"};
+                        msg = "No DB is selected for this project. Please choose a DB file to enable logging";
+
+                        int loggingQuestionReply = JOptionPane.showOptionDialog(getBurpFrame(), msg, "Select DB file", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+                        if (loggingQuestionReply == JOptionPane.OK_OPTION) {
+                            JFileChooser customStoreFileNameFileChooser = Utilities.createDBFileChooser();
+                            int dbFileSelectionReply = customStoreFileNameFileChooser.showDialog(getBurpFrame(), "Use");
+                            if (dbFileSelectionReply == JFileChooser.APPROVE_OPTION) {
+                                try {
+                                    dbPath = customStoreFileNameFileChooser.getSelectedFile().getAbsolutePath().replaceAll("\\\\", "/");
+                                    ConfigMenu.this.preferences.setBoolean(PAUSE_LOGGING_CFG_KEY, Boolean.FALSE);
+                                    ConfigMenu.IS_LOGGING_PAUSED = Boolean.FALSE;
+                                    activityLogger.updateStoreLocation(dbPath);
+                                    msg = "Set DB file.";
+                                    preferences.setString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY, dbPath);
+                                } catch (Exception exp) {
+                                    ConfigMenu.this.trace.writeLog("Cannot update DB file location: " + exp.getMessage());
+                                }
+                            } else {
+                                JOptionPane.showMessageDialog(getBurpFrame(), "No DB file was selected. The Logging remains paused.", "Logging paused", JOptionPane.INFORMATION_MESSAGE);
+                                msg = "No DB was chosen. Logging is disabled";
+                            }
+                        } else {
+                            msg = "No DB was chosen. Logging is disabled.";
+                        }
+                    } else {
+                        try {
+                            activityLogger.updateStoreLocation(dbPath);
+                            ConfigMenu.IS_LOGGING_PAUSED = Boolean.FALSE;
+                            ConfigMenu.this.preferences.setBoolean(PAUSE_LOGGING_CFG_KEY, Boolean.FALSE);
+                            msg = "Logging is enabled";
+                        } catch (Exception exp) {
+                            ConfigMenu.this.trace.writeLog("Cannot update DB file location: " + exp.getMessage());
+                        }
+                    }
+                    subMenuPauseTheLogging.setState(Boolean.TRUE.equals(ConfigMenu.this.preferences.getBoolean(PAUSE_LOGGING_CFG_KEY)));
                     ConfigMenu.this.trace.writeLog(msg);
                 }
             }
@@ -223,9 +259,6 @@ public class ConfigMenu implements Runnable {
                                     customStoreFileName = customStoreFileNameFileChooser.getSelectedFile().getAbsolutePath().replaceAll("\\\\", "/");
                                     activityLogger.updateStoreLocation(customStoreFileName);
                                     ConfigMenu.this.preferences.setString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY, customStoreFileName);
-                                    JOptionPane.showMessageDialog(getBurpFrame(), "DB file updated to use:\n\r" + customStoreFileName, title, JOptionPane.INFORMATION_MESSAGE);
-                                } else {
-                                    JOptionPane.showMessageDialog(getBurpFrame(), "The following database file will continue to be used:\n\r" + customStoreFileName, title, JOptionPane.INFORMATION_MESSAGE);
                                 }
                             }
                         } catch (Exception exp) {
@@ -249,7 +282,8 @@ public class ConfigMenu implements Runnable {
                             buffer += "Amount of data sent by the biggest HTTP request: \n\r" + formatStat(stats.getBiggestRequestSize()) + ".\n\r";
                             buffer += "Total amount of data sent via HTTP requests: \n\r" + formatStat(stats.getTotalRequestsSize()) + ".\n\r";
                             buffer += "Total number of records in the database: \n\r" + stats.getTotalRecordCount() + " HTTP requests.\n\r";
-                            buffer += "Maximum number of hits sent in a second: \n\r" + stats.getMaxHitsBySecond() + " Hits.";
+                            buffer += "Maximum number of hits sent in a second: \n\r" + stats.getMaxHitsBySecond() + " Hits.\n\r";
+                            buffer += "DB file path: \n\r" + ConfigMenu.this.preferences.getString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY);
                             //Display the information via the UI
                             JOptionPane.showMessageDialog(ConfigMenu.getBurpFrame(), buffer, "Events statistics", JOptionPane.INFORMATION_MESSAGE);
                         } catch (Exception exp) {

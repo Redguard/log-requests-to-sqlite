@@ -54,15 +54,13 @@ class ActivityLogger implements ExtensionUnloadingHandler {
     /**
      * Constructor.
      *
-     * @param storeName     Name of the storage that will be created (file path).
      * @param trace         Ref on project logger.
      * @throws Exception    If connection with the DB cannot be opened or if the DB cannot be created or if the JDBC driver cannot be loaded.
      */
-    ActivityLogger(String storeName, MontoyaApi api, Trace trace) throws Exception {
+    ActivityLogger(MontoyaApi api, Trace trace) throws Exception {
         //Load the SQLite driver
         Class.forName("org.sqlite.JDBC");
         this.trace = trace;
-        updateStoreLocation(storeName);
     }
 
     /**

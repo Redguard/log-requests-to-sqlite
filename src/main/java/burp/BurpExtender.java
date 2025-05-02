@@ -4,13 +4,12 @@ import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
 import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
-import burp.api.montoya.persistence.Preferences;
+import burp.api.montoya.persistence.PersistedObject;
 
 
 /**
@@ -26,59 +25,46 @@ public class BurpExtender implements BurpExtension {
     @Override
     public void initialize(MontoyaApi api) {
         this.api = api;
-        Preferences preferences = this.api.persistence().preferences();
+        PersistedObject preferences = this.api.persistence().extensionData();
         ConfigMenu configMenu = null;
         String extensionName = "LogRequestsToSQLite";
         JFrame burpFrame = ConfigMenu.getBurpFrame();
 
+        String customStoreFileName = preferences.getString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY);
         try {
             //Extension init.
             this.api.extension().setName(extensionName);
             Trace trace = new Trace(this.api);
             //If the logging is not paused then ask to the user if he want to continue to log the events in the current DB file or pause the logging
-            String defaultStoreFileName = new File(System.getProperty("user.home"), extensionName + ".db").getAbsolutePath().replaceAll("\\\\", "/");
-            String customStoreFileName = preferences.getString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY);
-            if (customStoreFileName == null || !Files.exists(Paths.get(customStoreFileName))) {
+            // Boolean isLoggingPaused = Boolean.TRUE.equals(preferences.getBoolean(ConfigMenu.PAUSE_LOGGING_CFG_KEY));
+            while (!Boolean.TRUE.equals(preferences.getBoolean(ConfigMenu.PAUSE_LOGGING_CFG_KEY)) && (customStoreFileName == null || !Files.exists(Paths.get(customStoreFileName)))) {
                 if(customStoreFileName != null){
-                    this.api.logging().logToOutput("Default store file used because the previously stored DB file do not exist anymore ('" + customStoreFileName + "')");
+                    trace.writeLog("Previously stored DB file does not exist anymore ('" + customStoreFileName + "')");
                 }
-                customStoreFileName = defaultStoreFileName;
-            }
-            Boolean isLoggingPaused = Boolean.TRUE.equals(preferences.getBoolean(ConfigMenu.PAUSE_LOGGING_CFG_KEY));
-            if (!isLoggingPaused) {
-                Object[] options = {"Keep the DB file", "Change the DB file", "Pause the logging"};
-                String msg = "Continue to log events into the following database file?\n\r" + customStoreFileName;
-                //Mapping of the buttons with the dialog: options[0] => YES / options[1] => NO / options[2] => CANCEL
-                int loggingQuestionReply = JOptionPane.showOptionDialog(burpFrame, msg, extensionName, JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, null);
-                //Case for YES is already handled, use the stored file
-                if (loggingQuestionReply == JOptionPane.YES_OPTION) {
-                    preferences.setBoolean(ConfigMenu.PAUSE_LOGGING_CFG_KEY, Boolean.FALSE);
-                    this.api.logging().logToOutput("Logging is enabled.");
-                }
-                //Case for the NO => Change DB file
-                if (loggingQuestionReply == JOptionPane.NO_OPTION) {
+                Object[] options = {"Select DB file", "Pause Logging"};
+                String msg = "No DB is selected for this project. Please choose a DB file to enable logging";
+
+                int loggingQuestionReply = JOptionPane.showOptionDialog(burpFrame, msg, extensionName, JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+                if (loggingQuestionReply == JOptionPane.OK_OPTION) {
                     JFileChooser customStoreFileNameFileChooser = Utilities.createDBFileChooser();
                     int dbFileSelectionReply = customStoreFileNameFileChooser.showDialog(burpFrame, "Use");
                     if (dbFileSelectionReply == JFileChooser.APPROVE_OPTION) {
                         customStoreFileName = customStoreFileNameFileChooser.getSelectedFile().getAbsolutePath().replaceAll("\\\\", "/");
-                    } else {
-                        JOptionPane.showMessageDialog(burpFrame, "The following database file will continue to be used:\n\r" + customStoreFileName, extensionName, JOptionPane.INFORMATION_MESSAGE);
+                        preferences.setString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY, customStoreFileName);
                     }
-                    preferences.setBoolean(ConfigMenu.PAUSE_LOGGING_CFG_KEY, Boolean.FALSE);
-                    this.api.logging().logToOutput("Logging is enabled.");
-                }
-                //Case for the CANCEL => Pause the logging
-                if (loggingQuestionReply == JOptionPane.CANCEL_OPTION) {
+                } else {
+                    this.api.logging().logToOutput("No DB was chosen. Logging is disabled.");
                     preferences.setBoolean(ConfigMenu.PAUSE_LOGGING_CFG_KEY, Boolean.TRUE);
-                    this.api.logging().logToOutput("Logging is paused.");
+                    // isLoggingPaused = Boolean.TRUE;
                 }
-                //Save the location of the database file chosen by the user
-                preferences.setString(ConfigMenu.DB_FILE_CUSTOM_LOCATION_CFG_KEY, customStoreFileName);
-            } else {
-                this.api.logging().logToOutput("Logging is paused.");
             }
-            //Init logger and HTTP listener
-            ActivityLogger activityLogger = new ActivityLogger(customStoreFileName, this.api, trace);
+            ActivityLogger activityLogger = new ActivityLogger(this.api, trace);
+
+            if (customStoreFileName != null) {
+                activityLogger.updateStoreLocation(customStoreFileName);
+                trace.writeLog("Updated StoreLocation");
+            }
+
             ActivityHttpListener activityHttpListener = new ActivityHttpListener(activityLogger, trace);
             //Setup the configuration menu
             configMenu = new ConfigMenu(this.api, trace, activityLogger);
